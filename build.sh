@@ -13,19 +13,10 @@ echo "========================================"
 echo "Starting Limbo x86 Emulator Build for ARM64 Host (QEMU ${QEMU_VERSION})"
 echo "========================================"
 
-# 2. Install Required Dependencies and Fix Linking Issues
+# 2. Install Required Dependencies and Fix Ncurses Linking
 echo "Installing required dependencies and fixing Ncurses linking..."
 sudo apt-get update
 sudo apt-get install -y make autoconf automake git binutils libtool-bin pkg-config flex bison gettext texinfo rsync python3 patch gtk-doc-tools libncurses-dev
-
-# FIX: Create symlink for libncurses.so.5 to point to the modern libncurses.so.6
-# This fixes the BFD linking error during native compilation (Step 6).
-echo "Creating symlink for libncurses.so.5 to fix NDK linker issue..."
-if [ -f /usr/lib/x86_64-linux-gnu/libncurses.so.6 ]; then
-    sudo ln -s /usr/lib/x86_64-linux-gnu/libncurses.so.6 /usr/lib/x86_64-linux-gnu/libncurses.so.5
-elif [ -f /lib/x86_64-linux-gnu/libncurses.so.6 ]; then
-    sudo ln -s /lib/x86_64-linux-gnu/libncurses.so.6 /lib/x86_64-linux-gnu/libncurses.so.5
-fi
 
 # 3. Setup Android NDK r14b
 echo "Downloading and extracting Android NDK r14b..."
@@ -35,6 +26,22 @@ rm $NDK_ZIP
 
 export NDK_ROOT=$PROJECT_ROOT/$NDK_DIR
 echo "NDK_ROOT set to: $NDK_ROOT"
+
+# CRUCIAL FIX: NDK R14B LINKER ISSUE (libncurses.so.5)
+# This creates a symlink to the modern libncurses.so.6 file directly inside the NDK's 
+# toolchain lib directory, where the old NDK linker is guaranteed to look for version 5.
+NDK_TOOLCHAIN_PATH="$NDK_ROOT/toolchains/x86_64-4.9/prebuilt/linux-x86_64/lib"
+NDK_TOOLCHAIN_LIB_DIR="$NDK_TOOLCHAIN_PATH"
+
+mkdir -p "$NDK_TOOLCHAIN_LIB_DIR"
+
+echo "Applying NDK linker fix inside: $NDK_TOOLCHAIN_LIB_DIR"
+
+if [ -f /usr/lib/x86_64-linux-gnu/libncurses.so.6 ]; then
+    sudo ln -s /usr/lib/x86_64-linux-gnu/libncurses.so.6 "$NDK_TOOLCHAIN_LIB_DIR/libncurses.so.5"
+elif [ -f /lib/x86_64-linux-gnu/libncurses.so.6 ]; then
+    sudo ln -s /lib/x86_64-linux-gnu/libncurses.so.6 "$NDK_TOOLCHAIN_LIB_DIR/libncurses.so.5"
+fi
 
 # 4. Download and Extract External Libraries
 mkdir -p $JNI_DIR
@@ -106,13 +113,11 @@ echo "Starting APK build using Gradle..."
 cd $PROJECT_ROOT
 export ANDROID_SDK_ROOT=/usr/local/lib/android/sdk
 
-# FIX (Crucial): Force creation/update of Gradle Wrapper 6.5. 
-# This fixes the incompatibility between AGP 4.1.1 and the current Gradle 7.0.2 (as found in properties file).
+# FIX: Force creation/update of Gradle Wrapper 6.5. 
 if [ ! -f "gradlew" ]; then
     echo "Creating Gradle Wrapper compatible with AGP 4.1.1 (Gradle 6.5)..."
     gradle wrapper --gradle-version 6.5
 else
-    # Also update the existing wrapper if it exists (to fix the 7.0.2 issue)
     echo "Updating existing Gradle Wrapper to 6.5 to ensure compatibility..."
     gradle wrapper --gradle-version 6.5
 fi
