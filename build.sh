@@ -1,5 +1,5 @@
 #!/bin/bash
-set -e # Exit immediately if any command fails
+set -e 
 
 # 1. Setup Basic Variables
 PROJECT_ROOT=$(pwd)
@@ -7,16 +7,25 @@ NDK_ZIP="android-ndk-r14b-linux-x86_64.zip"
 NDK_DIR="android-ndk-r14b"
 NDK_URL="https://dl.google.com/android/repository/${NDK_ZIP}"
 JNI_DIR="limbo-android-lib/src/main/jni"
-QEMU_VERSION="5.1.0" # Target QEMU 5.1.0
+QEMU_VERSION="5.1.0" 
 
 echo "========================================"
 echo "Starting Limbo x86 Emulator Build for ARM64 Host (QEMU ${QEMU_VERSION})"
 echo "========================================"
 
-# 2. Install Required Dependencies (Confirmed for ubuntu-latest)
-echo "Installing required dependencies..."
+# 2. Install Required Dependencies and Fix Linking Issues
+echo "Installing required dependencies and fixing Ncurses linking..."
 sudo apt-get update
 sudo apt-get install -y make autoconf automake git binutils libtool-bin pkg-config flex bison gettext texinfo rsync python3 patch gtk-doc-tools libncurses-dev
+
+# FIX: Create symlink for libncurses.so.5 to point to the modern libncurses.so.6
+# This fixes the BFD linking error during native compilation (Step 6).
+echo "Creating symlink for libncurses.so.5 to fix NDK linker issue..."
+if [ -f /usr/lib/x86_64-linux-gnu/libncurses.so.6 ]; then
+    sudo ln -s /usr/lib/x86_64-linux-gnu/libncurses.so.6 /usr/lib/x86_64-linux-gnu/libncurses.so.5
+elif [ -f /lib/x86_64-linux-gnu/libncurses.so.6 ]; then
+    sudo ln -s /lib/x86_64-linux-gnu/libncurses.so.6 /lib/x86_64-linux-gnu/libncurses.so.5
+fi
 
 # 3. Setup Android NDK r14b
 echo "Downloading and extracting Android NDK r14b..."
@@ -27,7 +36,7 @@ rm $NDK_ZIP
 export NDK_ROOT=$PROJECT_ROOT/$NDK_DIR
 echo "NDK_ROOT set to: $NDK_ROOT"
 
-# 4. Download and Extract External Libraries - (تم إصلاح مسار tar)
+# 4. Download and Extract External Libraries
 mkdir -p $JNI_DIR
 cd $JNI_DIR
 
@@ -70,58 +79,44 @@ rm $SDL2_FILE
 
 # 5. Apply Patches
 echo "Applying patches..."
-
-# QEMU Patch
 cd qemu
 patch -p1 < ../patches/qemu-${QEMU_VERSION}.patch
 cd ..
-
-# glib Patch
 cd glib
 patch -p1 < ../patches/glib-2.56.1.patch
 cd ..
-
-# SDL2 Patch
 cd SDL2
 patch -p1 < ../patches/sdl2-2.0.8.patch
 cd ..
 
 # 6. Build Native Libraries
 echo "Starting native libraries build for ARM64 Host..."
-
-# Return to project root to set NDK_ROOT correctly
 cd $PROJECT_ROOT
-
-# Set environment variables for the build
 export NDK_ROOT=$PROJECT_ROOT/$NDK_DIR
 export USE_GCC=true
 export USE_QEMU_VERSION=$QEMU_VERSION
 export BUILD_HOST=arm64-v8a 
 export BUILD_GUEST=x86_64-softmmu 
 export USE_AAUDIO=false 
-
-# Enter JNI directory and start the build
 cd $JNI_DIR
 make limbo
 
 # 7. Build APK using Gradle
 echo "Starting APK build using Gradle..."
-
-# Return to project root
 cd $PROJECT_ROOT
-
-# Set environment variables for Gradle
 export ANDROID_SDK_ROOT=/usr/local/lib/android/sdk
 
-# FIX: Force creation of Gradle Wrapper 6.5 to be compatible with AGP 4.1.1.
+# FIX (Crucial): Force creation/update of Gradle Wrapper 6.5. 
+# This fixes the incompatibility between AGP 4.1.1 and the current Gradle 7.0.2 (as found in properties file).
 if [ ! -f "gradlew" ]; then
     echo "Creating Gradle Wrapper compatible with AGP 4.1.1 (Gradle 6.5)..."
     gradle wrapper --gradle-version 6.5
+else
+    # Also update the existing wrapper if it exists (to fix the 7.0.2 issue)
+    echo "Updating existing Gradle Wrapper to 6.5 to ensure compatibility..."
+    gradle wrapper --gradle-version 6.5
 fi
-# Ensure execute permission is set on the script
 chmod +x gradlew
-
-# Execute the build
 ./gradlew :limbo-android-x86:assembleRelease
 
 echo "========================================"
